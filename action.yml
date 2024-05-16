@@ -1,0 +1,29 @@
+name: "EIP Board"
+description: "Generate list of pull requests that need attention"
+
+inputs:
+  path:
+    description: "Where to place the generated HTML"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84
+        with:
+          cache-targets: false
+
+      - name: Install EIP Board
+        shell: bash
+        run: cargo install --locked --git https://github.com/gaudren/EIP-Board.git
+
+      - name: Generate List
+        id: eip-board
+        shell: bash
+        run: |
+          mkdir -p "$(dirname "$INPUT_PATH")"
+          eip-board > "$INPUT_PATH"
+        env:
+          INPUT_PATH: ${{ inputs.path }}
+          GITHUB_TOKEN: ${{ github.token }}
