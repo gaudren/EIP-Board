@@ -43,6 +43,8 @@ async fn main() -> octocrab::Result<()> {
             None => continue,
         };
 
+        authors(&octocrab, &pr, owner, repo).await?;
+
         if updated_at > reviewed_at {
             needs_review.push((pr.created_at, pr.html_url));
         }
@@ -154,4 +156,41 @@ async fn editors(oct: &Octocrab, owner: &str, repo: &str) -> octocrab::Result<Ha
     }
 
     Ok(results)
+}
+
+async fn authors(
+    oct: &Octocrab,
+    pr: &PullRequest,
+    owner: &str,
+    repo: &str,
+) -> octocrab::Result<HashSet<String>> {
+    let mut files = oct.pulls(owner, repo).list_files(pr.number).await?;
+    assert!(files.next.is_none());
+    let re = Regex::new(r"(EIPS|ERCS)/(eip|erc)-[0-9]+\.md").unwrap();
+    let files = files.take_items().into_iter().filter_map(|x| {
+        if re.is_match(&x.filename) {
+            Some(x.filename)
+        } else {
+            None
+        }
+    });
+
+    //let mut authors = HashSet::new();
+    let repo = pr.head.repo.as_ref().unwrap();
+
+    for file in files {
+        let mut content = oct
+            .repos(&repo.owner.as_ref().unwrap().login, &repo.name)
+            .get_content()
+            .path(file)
+            .r#ref(&pr.head.ref_field)
+            .send()
+            .await?;
+        let contents = content.take_items();
+        let c = &contents[0];
+        let decoded_content = c.decoded_content().unwrap();
+
+        println!("{decoded_content}")
+    }
+    todo!()
 }
