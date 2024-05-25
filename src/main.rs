@@ -2,10 +2,11 @@ use std::collections::HashSet;
 
 use askama::Template;
 use chrono::{DateTime, Utc};
+use eipw_preamble::Preamble;
 use octocrab::models::pulls::ReviewState;
 use octocrab::params;
 use octocrab::{models::pulls::PullRequest, Octocrab};
-use regex::Regex;
+use regex::{Regex, RegexSet};
 
 #[derive(Template)]
 #[template(path = "index.html")]
@@ -175,14 +176,28 @@ async fn authors(
         }
     });
 
+<<<<<<< Updated upstream
     //let mut authors = HashSet::new();
     let repo = pr.head.repo.as_ref().unwrap();
 
+=======
+    let mut author_set = HashSet::new();
+    let repo = pr.head.repo.as_ref().unwrap();
+
+    let re = Regex::new(
+            r"^[^()<>,@]+ \(@([a-zA-Z\d-]+)\)(?: <[^@][^>]*@[^>]+\.[^>]+>)?$")
+        .unwrap();
+
+>>>>>>> Stashed changes
     for file in files {
         let mut content = oct
             .repos(&repo.owner.as_ref().unwrap().login, &repo.name)
             .get_content()
+<<<<<<< Updated upstream
             .path(file)
+=======
+            .path(&file)
+>>>>>>> Stashed changes
             .r#ref(&pr.head.ref_field)
             .send()
             .await?;
@@ -190,7 +205,27 @@ async fn authors(
         let c = &contents[0];
         let decoded_content = c.decoded_content().unwrap();
 
+<<<<<<< Updated upstream
         println!("{decoded_content}")
     }
     todo!()
+=======
+        let (preamble, _) = Preamble::split(&decoded_content).unwrap();
+        let preamble = Preamble::parse(Some(&file), preamble).unwrap();
+        let authors = preamble.by_name("author").unwrap().value().trim();
+
+        let authors = authors.split(',').map(str::trim);
+
+        for author in authors {
+            let captures = match re.captures(author) {
+                Some(s) => s,
+                None => continue,
+            };
+            let username = captures.get(1).unwrap().as_str().to_lowercase();
+            author_set.insert(username);
+        }
+    }
+    println!("{:#?}", author_set);
+    Ok(author_set)
+>>>>>>> Stashed changes
 }
