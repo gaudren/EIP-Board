@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use askama::Template;
 use chrono::{DateTime, Utc};
 use eipw_preamble::Preamble;
+use octocrab::models::commits::CommitElement;
 use octocrab::models::pulls::ReviewState;
 use octocrab::params;
 use octocrab::{models::pulls::PullRequest, Octocrab};
@@ -12,6 +13,18 @@ use regex::{Regex, RegexSet};
 #[template(path = "index.html")]
 struct IndexTemplate {
     urls: Vec<String>,
+}
+
+#[derive(Debug)]
+struct Event {
+    actor: Actor,
+    when: DateTime<Utc>,
+}
+
+#[derive(Debug)]
+enum Actor {
+    Author,
+    Editor,
 }
 
 #[tokio::main]
@@ -44,7 +57,9 @@ async fn main() -> octocrab::Result<()> {
             None => continue,
         };
 
-        authors(&octocrab, &pr, owner, repo).await?;
+        let pr_authors = authors(&octocrab, &pr, owner, repo).await?;
+        let pr_comments = comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await?;
+        println!("{:?}", pr_comments);
 
         if updated_at > reviewed_at {
             needs_review.push((pr.created_at, pr.html_url));
@@ -120,7 +135,6 @@ async fn open_pull_requests(
         .pulls(owner, repo)
         .list()
         .state(params::State::Open)
-        // TODO: Filter out drafts
         .per_page(100)
         .send()
         .await?;
@@ -132,6 +146,7 @@ async fn open_pull_requests(
 
         current_page = new_page;
     }
+    let prs = prs.into_iter().filter(|x| x.draft != Some(true)).collect();
 
     Ok(prs)
 }
@@ -153,7 +168,7 @@ async fn editors(oct: &Octocrab, owner: &str, repo: &str) -> octocrab::Result<Ha
 
     let mut results = HashSet::new();
     for (_, [username]) in re.captures_iter(&decoded_content).map(|c| c.extract()) {
-        results.insert(username.to_string());
+        results.insert(username.to_lowercase());
     }
 
     Ok(results)
@@ -179,9 +194,7 @@ async fn authors(
     let mut author_set = HashSet::new();
     let repo = pr.head.repo.as_ref().unwrap();
 
-    let re = Regex::new(
-            r"^[^()<>,@]+ \(@([a-zA-Z\d-]+)\)(?: <[^@][^>]*@[^>]+\.[^>]+>)?$")
-        .unwrap();
+    let re = Regex::new(r"^[^()<>,@]+ \(@([a-zA-Z\d-]+)\)(?: <[^@][^>]*@[^>]+\.[^>]+>)?$").unwrap();
 
     for file in files {
         let mut content = oct
@@ -212,4 +225,54 @@ async fn authors(
     }
     println!("{:#?}", author_set);
     Ok(author_set)
+}
+
+async fn comments(
+    oct: &Octocrab,
+    pr: &PullRequest,
+    owner: &str,
+    repo: &str,
+    editors: &HashSet<String>,
+    authors: &HashSet<String>,
+) -> octocrab::Result<Vec<Event>> {
+    let mut current_page = oct
+        .pulls(owner, repo)
+        .list_comments(Some(pr.number))
+        .sort(params::pulls::comments::Sort::Created)
+        .direction(params::Direction::Ascending)
+        .per_page(100)
+        .send()
+        .await?;
+
+    let mut comments = current_page.take_items();
+
+    while let Some(mut new_page) = oct.get_page(&current_page.next).await? {
+        comments.extend(new_page.take_items());
+
+        current_page = new_page;
+    }
+
+    let events = comments
+        .into_iter()
+        .filter_map(|x| match x.user {
+            Some(author) => Some((author.login.to_lowercase(), x.created_at)),
+            None => None,
+        })
+        .filter_map(|(author, created_at)| {
+            if editors.contains(&author) {
+                Some(Event {
+                    actor: Actor::Editor,
+                    when: created_at,
+                })
+            } else if authors.contains(&author) {
+                Some(Event {
+                    actor: Actor::Author,
+                    when: created_at,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    Ok(events)
 }
