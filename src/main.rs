@@ -176,11 +176,6 @@ async fn authors(
         }
     });
 
-<<<<<<< Updated upstream
-    //let mut authors = HashSet::new();
-    let repo = pr.head.repo.as_ref().unwrap();
-
-=======
     let mut author_set = HashSet::new();
     let repo = pr.head.repo.as_ref().unwrap();
 
@@ -188,16 +183,11 @@ async fn authors(
             r"^[^()<>,@]+ \(@([a-zA-Z\d-]+)\)(?: <[^@][^>]*@[^>]+\.[^>]+>)?$")
         .unwrap();
 
->>>>>>> Stashed changes
     for file in files {
         let mut content = oct
             .repos(&repo.owner.as_ref().unwrap().login, &repo.name)
             .get_content()
-<<<<<<< Updated upstream
-            .path(file)
-=======
             .path(&file)
->>>>>>> Stashed changes
             .r#ref(&pr.head.ref_field)
             .send()
             .await?;
@@ -205,11 +195,6 @@ async fn authors(
         let c = &contents[0];
         let decoded_content = c.decoded_content().unwrap();
 
-<<<<<<< Updated upstream
-        println!("{decoded_content}")
-    }
-    todo!()
-=======
         let (preamble, _) = Preamble::split(&decoded_content).unwrap();
         let preamble = Preamble::parse(Some(&file), preamble).unwrap();
         let authors = preamble.by_name("author").unwrap().value().trim();
@@ -227,5 +212,4 @@ async fn authors(
     }
     println!("{:#?}", author_set);
     Ok(author_set)
->>>>>>> Stashed changes
 }
