@@ -21,7 +21,7 @@ struct Event {
     when: DateTime<Utc>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum Actor {
     Author,
     Editor,
@@ -44,25 +44,33 @@ async fn main() -> octocrab::Result<()> {
     let mut needs_review = Vec::new();
 
     for pr in opr {
-        let reviewed_at = match reviewed_by_editor(&octocrab, &editors, &pr, owner, repo).await? {
-            None => {
-                needs_review.push((pr.created_at, pr.html_url));
-                continue;
-            }
-            Some(r) => r,
-        };
+        let mut events = vec![Event{
+           actor: Actor::Author,
+           when: pr.created_at.unwrap(),
+        }];
 
-        let updated_at = match pr.updated_at {
-            Some(u) => u,
-            None => continue,
-        };
+        if let Some(review_event) = reviewed_by_editor(&octocrab, &editors, &pr, owner, repo).await? {
+            events.push(review_event);
+        }
 
         let pr_authors = authors(&octocrab, &pr, owner, repo).await?;
         let pr_comments = comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await?;
-        println!("{:?}", pr_comments);
 
-        if updated_at > reviewed_at {
-            needs_review.push((pr.created_at, pr.html_url));
+        events.extend(pr_comments);
+
+        events.sort_unstable_by_key(|x| x.when);
+        let last_editor = events.iter().filter(|x| x.actor == Actor::Editor).last();
+
+        let last_editor = match last_editor {
+            None => {
+                needs_review.push((events[0].when, pr.html_url));
+                continue;
+            }
+            Some(e) => e,
+        };
+        let first_author = events.iter().filter(|x| x.actor == Actor::Author).filter(|x| x.when > last_editor.when).next();
+        if let Some(first_author) = first_author {
+            needs_review.push((first_author.when, pr.html_url));
         }
     }
 
@@ -85,7 +93,7 @@ async fn reviewed_by_editor(
     open_pr: &PullRequest,
     owner: &str,
     repo: &str,
-) -> octocrab::Result<Option<DateTime<Utc>>> {
+) -> octocrab::Result<Option<Event>> {
     let reviews = oct
         .pulls(owner, repo)
         .list_reviews(open_pr.number)
@@ -114,14 +122,14 @@ async fn reviewed_by_editor(
                 Some(u) => u,
                 None => return false,
             };
-            editors.contains(&user.login)
+            editors.contains(&user.login.to_lowercase())
         })
         .collect();
 
     reviewers.sort_by_key(|x| x.submitted_at);
 
     match reviewers.last() {
-        Some(u) => Ok(u.submitted_at),
+        Some(u) => Ok(Some(Event{actor: Actor::Editor, when: u.submitted_at.unwrap()})),
         None => Ok(None),
     }
 }
@@ -208,8 +216,20 @@ async fn authors(
         let c = &contents[0];
         let decoded_content = c.decoded_content().unwrap();
 
-        let (preamble, _) = Preamble::split(&decoded_content).unwrap();
-        let preamble = Preamble::parse(Some(&file), preamble).unwrap();
+        let (preamble, _) = match Preamble::split(&decoded_content) {
+            Err(e) => {
+                eprintln!("{:?}: {e}", pr.html_url);
+                continue;
+            },
+            Ok(o) => o,
+        };
+        let preamble = match Preamble::parse(Some(&file), preamble) {
+            Err(e) => {
+                eprintln!("{:?}: {e}", pr.html_url);
+                continue;
+            },
+            Ok(o) => o,
+        };
         let authors = preamble.by_name("author").unwrap().value().trim();
 
         let authors = authors.split(',').map(str::trim);
@@ -223,7 +243,6 @@ async fn authors(
             author_set.insert(username);
         }
     }
-    println!("{:#?}", author_set);
     Ok(author_set)
 }
 
@@ -236,10 +255,8 @@ async fn comments(
     authors: &HashSet<String>,
 ) -> octocrab::Result<Vec<Event>> {
     let mut current_page = oct
-        .pulls(owner, repo)
-        .list_comments(Some(pr.number))
-        .sort(params::pulls::comments::Sort::Created)
-        .direction(params::Direction::Ascending)
+        .issues(owner, repo)
+        .list_comments(pr.number)
         .per_page(100)
         .send()
         .await?;
@@ -254,10 +271,7 @@ async fn comments(
 
     let events = comments
         .into_iter()
-        .filter_map(|x| match x.user {
-            Some(author) => Some((author.login.to_lowercase(), x.created_at)),
-            None => None,
-        })
+        .map(|x| (x.user.login.to_lowercase(),x.created_at))
         .filter_map(|(author, created_at)| {
             if editors.contains(&author) {
                 Some(Event {
