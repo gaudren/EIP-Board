@@ -45,12 +45,14 @@ async fn main() -> octocrab::Result<()> {
     let mut needs_review = Vec::new();
 
     for pr in opr {
-        let mut events = vec![Event{
-           actor: Actor::Author,
-           when: pr.created_at.unwrap(),
+        let mut events = vec![Event {
+            actor: Actor::Author,
+            when: pr.created_at.unwrap(),
         }];
 
-        if let Some(review_event) = reviewed_by_editor(&octocrab, &editors, &pr, owner, repo).await? {
+        if let Some(review_event) =
+            reviewed_by_editor(&octocrab, &editors, &pr, owner, repo).await?
+        {
             events.push(review_event);
         }
 
@@ -75,7 +77,11 @@ async fn main() -> octocrab::Result<()> {
             }
             Some(e) => e,
         };
-        let first_author = events.iter().filter(|x| x.actor == Actor::Author).filter(|x| x.when > last_editor.when).next();
+        let first_author = events
+            .iter()
+            .filter(|x| x.actor == Actor::Author)
+            .filter(|x| x.when > last_editor.when)
+            .next();
         if let Some(first_author) = first_author {
             needs_review.push((first_author.when, pr.html_url));
         }
@@ -135,7 +141,10 @@ async fn reviewed_by_editor(
     reviewers.sort_by_key(|x| x.submitted_at);
 
     match reviewers.last() {
-        Some(u) => Ok(Some(Event{actor: Actor::Editor, when: u.submitted_at.unwrap()})),
+        Some(u) => Ok(Some(Event {
+            actor: Actor::Editor,
+            when: u.submitted_at.unwrap(),
+        })),
         None => Ok(None),
     }
 }
@@ -226,14 +235,14 @@ async fn authors(
             Err(e) => {
                 eprintln!("{:?}: {e}", pr.html_url);
                 continue;
-            },
+            }
             Ok(o) => o,
         };
         let preamble = match Preamble::parse(Some(&file), preamble) {
             Err(e) => {
                 eprintln!("{:?}: {e}", pr.html_url);
                 continue;
-            },
+            }
             Ok(o) => o,
         };
         let authors = preamble.by_name("author").unwrap().value().trim();
@@ -277,7 +286,7 @@ async fn comments(
 
     let events = comments
         .into_iter()
-        .map(|x| (x.user.login.to_lowercase(),x.created_at))
+        .map(|x| (x.user.login.to_lowercase(), x.created_at))
         .filter_map(|(author, created_at)| {
             if editors.contains(&author) {
                 Some(Event {
@@ -361,12 +370,20 @@ async fn commits(
 
     assert!(current_page.next.is_none());
     let commits = current_page.take_items();
-    assert!(commits.len() < 250, "/pulls/{{number}}/commits can only read 250 commits");
+    assert!(
+        commits.len() < 250,
+        "/pulls/{{number}}/commits can only read 250 commits"
+    );
 
     let events = commits
         .into_iter()
         // Pick a date for each commit, based on committer (or failing that, author.)
-        .filter_map(|x| x.commit.committer.and_then(|x| x.date).or_else(|| x.commit.author.and_then(|x| x.date)))
+        .filter_map(|x| {
+            x.commit
+                .committer
+                .and_then(|x| x.date)
+                .or_else(|| x.commit.author.and_then(|x| x.date))
+        })
         .map(|date| DateTime::parse_from_rfc3339(&date).unwrap())
         .map(|when| Event {
             actor: Actor::Author,
