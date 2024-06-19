@@ -3,12 +3,10 @@ use std::collections::HashSet;
 use askama::Template;
 use chrono::{DateTime, Utc};
 use eipw_preamble::Preamble;
-use octocrab::models::commits::{CommitElement, GitUser};
 use octocrab::models::pulls::ReviewState;
-use octocrab::models::Author;
 use octocrab::params;
 use octocrab::{models::pulls::PullRequest, Octocrab};
-use regex::{Regex, RegexSet};
+use regex::Regex;
 
 #[derive(Template)]
 #[template(path = "index.html")]
@@ -35,7 +33,7 @@ async fn main() -> octocrab::Result<()> {
         std::env::var("GITHUB_REPOSITORY").expect("GITHUB_REPOSITORY env variable is requried");
 
     let (owner, repo) = repo
-        .split_once("/")
+        .split_once('/')
         .expect("No slash in GitHub repository.");
 
     let octocrab = Octocrab::builder().personal_token(token).build()?;
@@ -45,9 +43,10 @@ async fn main() -> octocrab::Result<()> {
     let mut needs_review = Vec::new();
 
     for pr in opr {
+        let created = pr.created_at.unwrap();
         let mut events = vec![Event {
             actor: Actor::Author,
-            when: pr.created_at.unwrap(),
+            when: created,
         }];
 
         if let Some(review_event) =
@@ -67,6 +66,9 @@ async fn main() -> octocrab::Result<()> {
         let pr_commits = commits(&octocrab, &pr, owner, repo).await?;
         events.extend(pr_commits);
 
+        // Remove events that predate the PR creation (like commits.)
+        events.retain(|f| f.when >= created);
+
         events.sort_unstable_by_key(|x| x.when);
         let last_editor = events.iter().filter(|x| x.actor == Actor::Editor).last();
 
@@ -79,9 +81,7 @@ async fn main() -> octocrab::Result<()> {
         };
         let first_author = events
             .iter()
-            .filter(|x| x.actor == Actor::Author)
-            .filter(|x| x.when > last_editor.when)
-            .next();
+            .find(|x| x.actor == Actor::Author && x.when > last_editor.when);
         if let Some(first_author) = first_author {
             needs_review.push((first_author.when, pr.html_url));
         }
@@ -114,7 +114,7 @@ async fn reviewed_by_editor(
         .send()
         .await?;
 
-    assert!(matches!(reviews.next, None));
+    assert!(reviews.next.is_none());
 
     let reviews = reviews.items;
     if reviews.is_empty() {
