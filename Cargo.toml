@@ -9,7 +9,7 @@ edition = "2021"
 askama = "0.12.1"
 chrono = "0.4.38"
 eipw-preamble = "0.1.0"
-octocrab = "0.38.0"
+octocrab = { git = "https://github.com/SamWilsn/octocrab.git", rev = "1f80dafaface98a6b33f4150e35b2b3c2a8849f3" }
 regex = "1.10.4"
 reqwest = "0.12.4"
 tokio = { version = "1.37.0", features = ["macros", "rt-multi-thread"] }

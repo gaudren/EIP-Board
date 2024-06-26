@@ -3,11 +3,10 @@ use std::collections::HashSet;
 use askama::Template;
 use chrono::{DateTime, Utc};
 use eipw_preamble::Preamble;
-use octocrab::models::commits::CommitElement;
 use octocrab::models::pulls::ReviewState;
 use octocrab::params;
 use octocrab::{models::pulls::PullRequest, Octocrab};
-use regex::{Regex, RegexSet};
+use regex::Regex;
 
 #[derive(Template)]
 #[template(path = "index.html")]
@@ -34,7 +33,7 @@ async fn main() -> octocrab::Result<()> {
         std::env::var("GITHUB_REPOSITORY").expect("GITHUB_REPOSITORY env variable is requried");
 
     let (owner, repo) = repo
-        .split_once("/")
+        .split_once('/')
         .expect("No slash in GitHub repository.");
 
     let octocrab = Octocrab::builder().personal_token(token).build()?;
@@ -44,19 +43,31 @@ async fn main() -> octocrab::Result<()> {
     let mut needs_review = Vec::new();
 
     for pr in opr {
-        let mut events = vec![Event{
-           actor: Actor::Author,
-           when: pr.created_at.unwrap(),
+        let created = pr.created_at.unwrap();
+        let mut events = vec![Event {
+            actor: Actor::Author,
+            when: created,
         }];
 
-        if let Some(review_event) = reviewed_by_editor(&octocrab, &editors, &pr, owner, repo).await? {
+        if let Some(review_event) =
+            reviewed_by_editor(&octocrab, &editors, &pr, owner, repo).await?
+        {
             events.push(review_event);
         }
 
         let pr_authors = authors(&octocrab, &pr, owner, repo).await?;
-        let pr_comments = comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await?;
+        let comments = comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await?;
 
-        events.extend(pr_comments);
+        events.extend(comments);
+
+        let comments = pr_comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await?;
+        events.extend(comments);
+
+        let pr_commits = commits(&octocrab, &pr, owner, repo).await?;
+        events.extend(pr_commits);
+
+        // Remove events that predate the PR creation (like commits.)
+        events.retain(|f| f.when >= created);
 
         events.sort_unstable_by_key(|x| x.when);
         let last_editor = events.iter().filter(|x| x.actor == Actor::Editor).last();
@@ -68,7 +79,9 @@ async fn main() -> octocrab::Result<()> {
             }
             Some(e) => e,
         };
-        let first_author = events.iter().filter(|x| x.actor == Actor::Author).filter(|x| x.when > last_editor.when).next();
+        let first_author = events
+            .iter()
+            .find(|x| x.actor == Actor::Author && x.when > last_editor.when);
         if let Some(first_author) = first_author {
             needs_review.push((first_author.when, pr.html_url));
         }
@@ -98,11 +111,10 @@ async fn reviewed_by_editor(
         .pulls(owner, repo)
         .list_reviews(open_pr.number)
         .per_page(100)
-        .page(1u32)
         .send()
         .await?;
 
-    assert!(matches!(reviews.next, None));
+    assert!(reviews.next.is_none());
 
     let reviews = reviews.items;
     if reviews.is_empty() {
@@ -129,7 +141,10 @@ async fn reviewed_by_editor(
     reviewers.sort_by_key(|x| x.submitted_at);
 
     match reviewers.last() {
-        Some(u) => Ok(Some(Event{actor: Actor::Editor, when: u.submitted_at.unwrap()})),
+        Some(u) => Ok(Some(Event {
+            actor: Actor::Editor,
+            when: u.submitted_at.unwrap(),
+        })),
         None => Ok(None),
     }
 }
@@ -220,14 +235,14 @@ async fn authors(
             Err(e) => {
                 eprintln!("{:?}: {e}", pr.html_url);
                 continue;
-            },
+            }
             Ok(o) => o,
         };
         let preamble = match Preamble::parse(Some(&file), preamble) {
             Err(e) => {
                 eprintln!("{:?}: {e}", pr.html_url);
                 continue;
-            },
+            }
             Ok(o) => o,
         };
         let authors = preamble.by_name("author").unwrap().value().trim();
@@ -271,7 +286,7 @@ async fn comments(
 
     let events = comments
         .into_iter()
-        .map(|x| (x.user.login.to_lowercase(),x.created_at))
+        .map(|x| (x.user.login.to_lowercase(), x.created_at))
         .filter_map(|(author, created_at)| {
             if editors.contains(&author) {
                 Some(Event {
@@ -286,6 +301,93 @@ async fn comments(
             } else {
                 None
             }
+        })
+        .collect();
+    Ok(events)
+}
+
+async fn pr_comments(
+    oct: &Octocrab,
+    pr: &PullRequest,
+    owner: &str,
+    repo: &str,
+    editors: &HashSet<String>,
+    authors: &HashSet<String>,
+) -> octocrab::Result<Vec<Event>> {
+    let mut current_page = oct
+        .pulls(owner, repo)
+        .list_comments(Some(pr.number))
+        .per_page(100)
+        .send()
+        .await?;
+
+    let mut comments = current_page.take_items();
+
+    while let Some(mut new_page) = oct.get_page(&current_page.next).await? {
+        comments.extend(new_page.take_items());
+
+        current_page = new_page;
+    }
+
+    let events = comments
+        .into_iter()
+        .filter_map(|x| match x.user {
+            Some(s) => Some((s, x.created_at)),
+            None => None,
+        })
+        .map(|(user, created_at)| (user.login.to_lowercase(), created_at))
+        .filter_map(|(author, created_at)| {
+            if editors.contains(&author) {
+                Some(Event {
+                    actor: Actor::Editor,
+                    when: created_at,
+                })
+            } else if authors.contains(&author) {
+                Some(Event {
+                    actor: Actor::Author,
+                    when: created_at,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    Ok(events)
+}
+
+async fn commits(
+    oct: &Octocrab,
+    pr: &PullRequest,
+    owner: &str,
+    repo: &str,
+) -> octocrab::Result<Vec<Event>> {
+    let mut current_page = oct
+        .pulls(owner, repo)
+        .list_commits(pr.number)
+        .per_page(250)
+        .send()
+        .await?;
+
+    assert!(current_page.next.is_none());
+    let commits = current_page.take_items();
+    assert!(
+        commits.len() < 250,
+        "/pulls/{{number}}/commits can only read 250 commits"
+    );
+
+    let events = commits
+        .into_iter()
+        // Pick a date for each commit, based on committer (or failing that, author.)
+        .filter_map(|x| {
+            x.commit
+                .committer
+                .and_then(|x| x.date)
+                .or_else(|| x.commit.author.and_then(|x| x.date))
+        })
+        .map(|date| DateTime::parse_from_rfc3339(&date).unwrap())
+        .map(|when| Event {
+            actor: Actor::Author,
+            when: when.into(),
         })
         .collect();
     Ok(events)
