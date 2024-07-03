@@ -107,16 +107,21 @@ async fn reviewed_by_editor(
     owner: &str,
     repo: &str,
 ) -> octocrab::Result<Option<Event>> {
-    let reviews = oct
+    let mut current_page = oct
         .pulls(owner, repo)
         .list_reviews(open_pr.number)
-        .per_page(100)
+        .per_page(255)
         .send()
         .await?;
 
-    assert!(reviews.next.is_none());
+    let mut reviews = current_page.take_items();
 
-    let reviews = reviews.items;
+    while let Some(mut new_page) = oct.get_page(&current_page.next).await? {
+        reviews.extend(new_page.take_items());
+
+        current_page = new_page;
+    }
+
     if reviews.is_empty() {
         return Ok(None);
     }
@@ -134,7 +139,11 @@ async fn reviewed_by_editor(
                 Some(u) => u,
                 None => return false,
             };
-            editors.contains(&user.login.to_lowercase())
+            let login = match &user.login {
+                Some(l) => l,
+                None => return false,
+            };
+            editors.contains(&login.to_lowercase())
         })
         .collect();
 
@@ -220,8 +229,9 @@ async fn authors(
     let re = Regex::new(r"^[^()<>,@]+ \(@([a-zA-Z\d-]+)\)(?: <[^@][^>]*@[^>]+\.[^>]+>)?$").unwrap();
 
     for file in files {
+        let owner_login = repo.owner.as_ref().unwrap().login.as_ref().unwrap();
         let mut content = oct
-            .repos(&repo.owner.as_ref().unwrap().login, &repo.name)
+            .repos(owner_login, &repo.name)
             .get_content()
             .path(&file)
             .r#ref(&pr.head.ref_field)
@@ -286,7 +296,7 @@ async fn comments(
 
     let events = comments
         .into_iter()
-        .map(|x| (x.user.login.to_lowercase(), x.created_at))
+        .filter_map(|x| Some((x.user.login?.to_lowercase(), x.created_at)))
         .filter_map(|(author, created_at)| {
             if editors.contains(&author) {
                 Some(Event {
@@ -335,7 +345,7 @@ async fn pr_comments(
             Some(s) => Some((s, x.created_at)),
             None => None,
         })
-        .map(|(user, created_at)| (user.login.to_lowercase(), created_at))
+        .filter_map(|(user, created_at)| Some((user.login?.to_lowercase(), created_at)))
         .filter_map(|(author, created_at)| {
             if editors.contains(&author) {
                 Some(Event {
