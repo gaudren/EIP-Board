@@ -212,10 +212,17 @@ async fn authors(
     owner: &str,
     repo: &str,
 ) -> octocrab::Result<HashSet<String>> {
-    let mut files = oct.pulls(owner, repo).list_files(pr.number).await?;
-    assert!(files.next.is_none());
+    let mut current_page = oct.pulls(owner, repo).list_files(pr.number).await?;
+    let mut files = current_page.take_items();
+
+    while let Some(mut new_page) = oct.get_page(&current_page.next).await? {
+        files.extend(new_page.take_items());
+
+        current_page = new_page;
+    }
+
     let re = Regex::new(r"(EIPS|ERCS)/(eip|erc)-[0-9]+\.md").unwrap();
-    let files = files.take_items().into_iter().filter_map(|x| {
+    let files = files.into_iter().filter_map(|x| {
         if re.is_match(&x.filename) {
             Some(x.filename)
         } else {
