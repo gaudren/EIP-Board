@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 use std::collections::HashSet;
 
 use askama::Template;
@@ -10,7 +16,13 @@ use regex::Regex;
 
 #[derive(Template)]
 #[template(path = "index.html")]
-struct IndexTemplate {
+struct HtmlTemplate {
+    urls: Vec<String>,
+}
+
+#[derive(Template)]
+#[template(path = "index.md")]
+struct MarkdownTemplate {
     urls: Vec<String>,
 }
 
@@ -89,14 +101,21 @@ async fn main() -> octocrab::Result<()> {
 
     needs_review.sort();
 
-    let index = IndexTemplate {
-        urls: needs_review
-            .into_iter()
-            .filter_map(|x| x.1)
-            .map(|x| x.to_string())
-            .collect(),
-    };
-    println!("{}", index.render().unwrap());
+    let urls = needs_review
+        .into_iter()
+        .filter_map(|x| x.1)
+        .map(|x| x.to_string())
+        .collect();
+
+    let markdown = matches!(std::env::args().nth(1).as_deref(), Some("--markdown"));
+
+    if markdown {
+        let index = MarkdownTemplate { urls };
+        println!("{}", index.render().unwrap());
+    } else {
+        let index = HtmlTemplate { urls };
+        println!("{}", index.render().unwrap());
+    }
     Ok(())
 }
 

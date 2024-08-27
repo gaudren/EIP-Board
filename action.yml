@@ -5,6 +5,9 @@ inputs:
   path:
     description: "Where to place the generated HTML"
     required: true
+  extra_args:
+    description: "Extra arguments to pass to eip-board"
+    required: false
 
 runs:
   using: "composite"
@@ -16,14 +19,14 @@ runs:
 
       - name: Install EIP Board
         shell: bash
-        run: cargo install --locked --git https://github.com/gaudren/EIP-Board.git
+        run: cargo install --locked --path "${{ github.action_path }}"
 
       - name: Generate List
         id: eip-board
         shell: bash
         run: |
           mkdir -p "$(dirname "$INPUT_PATH")"
-          eip-board > "$INPUT_PATH"
+          eip-board ${{ inputs.extra_args }} > "$INPUT_PATH"
         env:
           INPUT_PATH: ${{ inputs.path }}
           GITHUB_TOKEN: ${{ github.token }}
