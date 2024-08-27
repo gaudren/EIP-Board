@@ -139,11 +139,7 @@ async fn reviewed_by_editor(
                 Some(u) => u,
                 None => return false,
             };
-            let login = match &user.login {
-                Some(l) => l,
-                None => return false,
-            };
-            editors.contains(&login.to_lowercase())
+            editors.contains(&user.login.to_lowercase())
         })
         .collect();
 
@@ -236,7 +232,7 @@ async fn authors(
     let re = Regex::new(r"^[^()<>,@]+ \(@([a-zA-Z\d-]+)\)(?: <[^@][^>]*@[^>]+\.[^>]+>)?$").unwrap();
 
     for file in files {
-        let owner_login = repo.owner.as_ref().unwrap().login.as_ref().unwrap();
+        let owner_login = &repo.owner.as_ref().unwrap().login;
         let mut content = oct
             .repos(owner_login, &repo.name)
             .get_content()
@@ -303,7 +299,7 @@ async fn comments(
 
     let events = comments
         .into_iter()
-        .filter_map(|x| Some((x.user.login?.to_lowercase(), x.created_at)))
+        .map(|x| (x.user.login.to_lowercase(), x.created_at))
         .filter_map(|(author, created_at)| {
             if editors.contains(&author) {
                 Some(Event {
@@ -352,7 +348,7 @@ async fn pr_comments(
             Some(s) => Some((s, x.created_at)),
             None => None,
         })
-        .filter_map(|(user, created_at)| Some((user.login?.to_lowercase(), created_at)))
+        .map(|(user, created_at)| (user.login.to_lowercase(), created_at))
         .filter_map(|(author, created_at)| {
             if editors.contains(&author) {
                 Some(Event {
@@ -380,7 +376,7 @@ async fn commits(
 ) -> octocrab::Result<Vec<Event>> {
     let mut current_page = oct
         .pulls(owner, repo)
-        .list_commits(pr.number)
+        .pr_commits(pr.number)
         .per_page(250)
         .send()
         .await?;
@@ -401,10 +397,9 @@ async fn commits(
                 .and_then(|x| x.date)
                 .or_else(|| x.commit.author.and_then(|x| x.date))
         })
-        .map(|date| DateTime::parse_from_rfc3339(&date).unwrap())
         .map(|when| Event {
             actor: Actor::Author,
-            when: when.into(),
+            when,
         })
         .collect();
     Ok(events)
