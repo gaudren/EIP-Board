@@ -8,6 +8,9 @@ inputs:
   extra_args:
     description: "Extra arguments to pass to eip-board"
     required: false
+  repository:
+    description: "Override the repository being analyzed"
+    required: false
 
 runs:
   using: "composite"
@@ -26,7 +29,9 @@ runs:
         shell: bash
         run: |
           mkdir -p "$(dirname "$INPUT_PATH")"
+          export GITHUB_REPOSITORY="${REPOSITORY:-$GITHUB_REPOSITORY}"
           eip-board ${{ inputs.extra_args }} > "$INPUT_PATH"
         env:
           INPUT_PATH: ${{ inputs.path }}
           GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ inputs.repository }}
