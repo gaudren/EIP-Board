@@ -16,7 +16,7 @@ runs:
 
       - name: Install EIP Board
         shell: bash
-        run: cargo install --locked --git https://github.com/gaudren/EIP-Board.git
+        run: cargo install --locked --path "${{ github.action_path }}"
 
       - name: Generate List
         id: eip-board
