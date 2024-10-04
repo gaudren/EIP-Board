@@ -13,6 +13,30 @@ use octocrab::models::pulls::ReviewState;
 use octocrab::params;
 use octocrab::{models::pulls::PullRequest, Octocrab};
 use regex::Regex;
+use reqwest::StatusCode;
+
+#[derive(Debug)]
+enum Error {
+    Octocrab(octocrab::Error),
+    Other(String),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Octocrab(o) => write!(f, "{}", o),
+            Self::Other(o) => write!(f, "{}", o),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<octocrab::Error> for Error {
+    fn from(value: octocrab::Error) -> Self {
+        Self::Octocrab(value)
+    }
+}
 
 #[derive(Template)]
 #[template(path = "index.html")]
@@ -39,7 +63,7 @@ enum Actor {
 }
 
 #[tokio::main]
-async fn main() -> octocrab::Result<()> {
+async fn main() -> Result<(), Error> {
     let token = std::env::var("GITHUB_TOKEN").expect("GITHUB_TOKEN env variable is required");
     let repo =
         std::env::var("GITHUB_REPOSITORY").expect("GITHUB_REPOSITORY env variable is requried");
@@ -54,28 +78,81 @@ async fn main() -> octocrab::Result<()> {
 
     let mut needs_review = Vec::new();
 
+    let mut last_error = Ok(());
+
     for pr in opr {
-        let created = pr.created_at.unwrap();
+        let pr_identifier = pr
+            .html_url
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| pr.url.clone());
+
+        let created = match pr.created_at {
+            Some(created) => created,
+            None => {
+                let msg = format!("No created date: {}", pr_identifier);
+                eprintln!("{}", msg);
+                last_error = Err(Error::Other(msg));
+                continue;
+            }
+        };
+
         let mut events = vec![Event {
             actor: Actor::Author,
             when: created,
         }];
 
-        if let Some(review_event) =
-            reviewed_by_editor(&octocrab, &editors, &pr, owner, repo).await?
-        {
-            events.push(review_event);
+        match reviewed_by_editor(&octocrab, &editors, &pr, owner, repo).await {
+            Ok(Some(review_event)) => {
+                events.push(review_event);
+            }
+            Err(e) => {
+                let msg = format!("Unable to get reviews by editor: {}\n{e:#?}", pr_identifier);
+                eprintln!("{}", msg);
+                last_error = Err(e.into());
+                continue;
+            }
+            _ => {}
         }
-
-        let pr_authors = authors(&octocrab, &pr, owner, repo).await?;
-        let comments = comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await?;
-
+        let pr_authors = match authors(&octocrab, &pr, owner, repo).await {
+            Ok(authors) => authors,
+            Err(e) => {
+                let msg = format!("Unable to get authors: {}\n{e:#?}", pr_identifier);
+                eprintln!("{}", msg);
+                last_error = Err(e.into());
+                continue;
+            }
+        };
+        let comments = match comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await {
+            Ok(comments) => comments,
+            Err(e) => {
+                let msg = format!("Unable to get issue comments: {}\n{e:#?}", pr_identifier);
+                eprintln!("{}", msg);
+                last_error = Err(e.into());
+                continue;
+            }
+        };
         events.extend(comments);
-
-        let comments = pr_comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await?;
-        events.extend(comments);
-
-        let pr_commits = commits(&octocrab, &pr, owner, repo).await?;
+        let pr_comments =
+            match pr_comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await {
+                Ok(comments) => comments,
+                Err(e) => {
+                    let msg = format!("Unable to get PR comments: {}\n{e:#?}", pr_identifier);
+                    eprintln!("{}", msg);
+                    last_error = Err(e.into());
+                    continue;
+                }
+            };
+        events.extend(pr_comments);
+        let pr_commits = match commits(&octocrab, &pr, owner, repo).await {
+            Ok(commits) => commits,
+            Err(e) => {
+                let msg = format!("Unable to get PR commits: {}\n{e:#?}", pr_identifier);
+                eprintln!("{}", msg);
+                last_error = Err(e.into());
+                continue;
+            }
+        };
         events.extend(pr_commits);
 
         // Remove events that predate the PR creation (like commits.)
@@ -86,7 +163,9 @@ async fn main() -> octocrab::Result<()> {
 
         let last_editor = match last_editor {
             None => {
-                needs_review.push((events[0].when, pr.html_url));
+                if let Some(first_event) = events.first() {
+                    needs_review.push((first_event.when, pr.html_url));
+                }
                 continue;
             }
             Some(e) => e,
@@ -116,7 +195,8 @@ async fn main() -> octocrab::Result<()> {
         let index = HtmlTemplate { urls };
         println!("{}", index.render().unwrap());
     }
-    Ok(())
+
+    last_error
 }
 
 async fn reviewed_by_editor(
@@ -252,13 +332,22 @@ async fn authors(
 
     for file in files {
         let owner_login = &repo.owner.as_ref().unwrap().login;
-        let mut content = oct
+        let content_result = oct
             .repos(owner_login, &repo.name)
             .get_content()
             .path(&file)
             .r#ref(&pr.head.ref_field)
             .send()
-            .await?;
+            .await;
+        let mut content = match content_result {
+            Ok(c) => c,
+            Err(octocrab::Error::GitHub { source, .. })
+                if source.status_code == StatusCode::NOT_FOUND =>
+            {
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         let contents = content.take_items();
         let c = &contents[0];
         let decoded_content = c.decoded_content().unwrap();
