@@ -163,7 +163,7 @@ async fn main() -> Result<(), Error> {
 
         let last_editor = match last_editor {
             None => {
-                if let Some(first_event) = events.get(0) {
+                if let Some(first_event) = events.first() {
                     needs_review.push((first_event.when, pr.html_url));
                 }
                 continue;
