@@ -13,6 +13,7 @@ use octocrab::models::pulls::ReviewState;
 use octocrab::params;
 use octocrab::{models::pulls::PullRequest, Octocrab};
 use regex::Regex;
+use reqwest::StatusCode;
 
 #[derive(Template)]
 #[template(path = "index.html")]
@@ -271,13 +272,22 @@ async fn authors(
 
     for file in files {
         let owner_login = &repo.owner.as_ref().unwrap().login;
-        let mut content = oct
+        let content_result = oct
             .repos(owner_login, &repo.name)
             .get_content()
             .path(&file)
             .r#ref(&pr.head.ref_field)
             .send()
-            .await?;
+            .await;
+        let mut content = match content_result {
+            Ok(c) => c,
+            Err(octocrab::Error::GitHub { source, .. })
+                if source.status_code == StatusCode::NOT_FOUND =>
+            {
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         let contents = content.take_items();
         let c = &contents[0];
         let decoded_content = c.decoded_content().unwrap();
