@@ -58,29 +58,28 @@ async fn main() -> octocrab::Result<()> {
         let created = match pr.created_at {
             Some(created) => created,
             None => {
-               
-                continue; 
+                continue;
             }
         };
-    
+
         let mut events = vec![Event {
             actor: Actor::Author,
             when: created,
         }];
-    
+
         match reviewed_by_editor(&octocrab, &editors, &pr, owner, repo).await {
             Ok(Some(review_event)) => {
                 events.push(review_event);
             }
             Err(_) => {
-                continue; 
+                continue;
             }
             _ => {}
         }
         let pr_authors = match authors(&octocrab, &pr, owner, repo).await {
             Ok(authors) => authors,
             Err(_) => {
-                continue; 
+                continue;
             }
         };
         let comments = match comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await {
@@ -90,12 +89,13 @@ async fn main() -> octocrab::Result<()> {
             }
         };
         events.extend(comments);
-        let pr_comments = match pr_comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await {
-            Ok(comments) => comments,
-            Err(_) => {
-                continue; 
-            }
-        };
+        let pr_comments =
+            match pr_comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await {
+                Ok(comments) => comments,
+                Err(_) => {
+                    continue;
+                }
+            };
         events.extend(pr_comments);
         let pr_commits = match commits(&octocrab, &pr, owner, repo).await {
             Ok(commits) => commits,
@@ -112,7 +112,7 @@ async fn main() -> octocrab::Result<()> {
                 if let Some(first_event) = events.get(0) {
                     needs_review.push((first_event.when, pr.html_url));
                 }
-                continue; 
+                continue;
             }
             Some(e) => e,
         };
@@ -228,9 +228,9 @@ async fn editors(oct: &Octocrab, owner: &str, repo: &str) -> octocrab::Result<Ha
         .send()
         .await?;
 
-    let contents = content.take_items();  
+    let contents = content.take_items();
     let c = &contents[0];
-    let decoded_content = c.decoded_content().unwrap(); 
+    let decoded_content = c.decoded_content().unwrap();
     let re = Regex::new(r"(?m)^  - (.+)").unwrap();
 
     let mut results = HashSet::new();
