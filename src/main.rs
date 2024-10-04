@@ -55,39 +55,64 @@ async fn main() -> octocrab::Result<()> {
     let mut needs_review = Vec::new();
 
     for pr in opr {
-        let created = pr.created_at.unwrap();
+        let created = match pr.created_at {
+            Some(created) => created,
+            None => {
+               
+                continue; 
+            }
+        };
+    
         let mut events = vec![Event {
             actor: Actor::Author,
             when: created,
         }];
-
-        if let Some(review_event) =
-            reviewed_by_editor(&octocrab, &editors, &pr, owner, repo).await?
-        {
-            events.push(review_event);
+    
+        match reviewed_by_editor(&octocrab, &editors, &pr, owner, repo).await {
+            Ok(Some(review_event)) => {
+                events.push(review_event);
+            }
+            Err(_) => {
+                continue; 
+            }
+            _ => {}
         }
-
-        let pr_authors = authors(&octocrab, &pr, owner, repo).await?;
-        let comments = comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await?;
-
+        let pr_authors = match authors(&octocrab, &pr, owner, repo).await {
+            Ok(authors) => authors,
+            Err(_) => {
+                continue; 
+            }
+        };
+        let comments = match comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await {
+            Ok(comments) => comments,
+            Err(_) => {
+                continue;
+            }
+        };
         events.extend(comments);
-
-        let comments = pr_comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await?;
-        events.extend(comments);
-
-        let pr_commits = commits(&octocrab, &pr, owner, repo).await?;
+        let pr_comments = match pr_comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await {
+            Ok(comments) => comments,
+            Err(_) => {
+                continue; 
+            }
+        };
+        events.extend(pr_comments);
+        let pr_commits = match commits(&octocrab, &pr, owner, repo).await {
+            Ok(commits) => commits,
+            Err(_) => {
+                continue;
+            }
+        };
         events.extend(pr_commits);
-
-        // Remove events that predate the PR creation (like commits.)
         events.retain(|f| f.when >= created);
-
         events.sort_unstable_by_key(|x| x.when);
         let last_editor = events.iter().filter(|x| x.actor == Actor::Editor).last();
-
         let last_editor = match last_editor {
             None => {
-                needs_review.push((events[0].when, pr.html_url));
-                continue;
+                if let Some(first_event) = events.get(0) {
+                    needs_review.push((first_event.when, pr.html_url));
+                }
+                continue; 
             }
             Some(e) => e,
         };
@@ -98,17 +123,13 @@ async fn main() -> octocrab::Result<()> {
             needs_review.push((first_author.when, pr.html_url));
         }
     }
-
     needs_review.sort();
-
     let urls = needs_review
         .into_iter()
         .filter_map(|x| x.1)
         .map(|x| x.to_string())
         .collect();
-
     let markdown = matches!(std::env::args().nth(1).as_deref(), Some("--markdown"));
-
     if markdown {
         let index = MarkdownTemplate { urls };
         println!("{}", index.render().unwrap());
@@ -207,17 +228,15 @@ async fn editors(oct: &Octocrab, owner: &str, repo: &str) -> octocrab::Result<Ha
         .send()
         .await?;
 
-    let contents = content.take_items();
+    let contents = content.take_items();  
     let c = &contents[0];
-    let decoded_content = c.decoded_content().unwrap();
-
+    let decoded_content = c.decoded_content().unwrap(); 
     let re = Regex::new(r"(?m)^  - (.+)").unwrap();
 
     let mut results = HashSet::new();
     for (_, [username]) in re.captures_iter(&decoded_content).map(|c| c.extract()) {
         results.insert(username.to_lowercase());
     }
-
     Ok(results)
 }
 
