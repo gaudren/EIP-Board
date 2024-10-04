@@ -15,6 +15,29 @@ use octocrab::{models::pulls::PullRequest, Octocrab};
 use regex::Regex;
 use reqwest::StatusCode;
 
+#[derive(Debug)]
+enum Error {
+    Octocrab(octocrab::Error),
+    Other(String),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Octocrab(o) => write!(f, "{}", o),
+            Self::Other(o) => write!(f, "{}", o),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<octocrab::Error> for Error {
+    fn from(value: octocrab::Error) -> Self {
+        Self::Octocrab(value)
+    }
+}
+
 #[derive(Template)]
 #[template(path = "index.html")]
 struct HtmlTemplate {
@@ -40,7 +63,7 @@ enum Actor {
 }
 
 #[tokio::main]
-async fn main() -> octocrab::Result<()> {
+async fn main() -> Result<(), Error> {
     let token = std::env::var("GITHUB_TOKEN").expect("GITHUB_TOKEN env variable is required");
     let repo =
         std::env::var("GITHUB_REPOSITORY").expect("GITHUB_REPOSITORY env variable is requried");
@@ -55,10 +78,21 @@ async fn main() -> octocrab::Result<()> {
 
     let mut needs_review = Vec::new();
 
+    let mut last_error = Ok(());
+
     for pr in opr {
+        let pr_identifier = pr
+            .html_url
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| pr.url.clone());
+
         let created = match pr.created_at {
             Some(created) => created,
             None => {
+                let msg = format!("No created date: {}", pr_identifier);
+                eprintln!("{}", msg);
+                last_error = Err(Error::Other(msg));
                 continue;
             }
         };
@@ -72,20 +106,29 @@ async fn main() -> octocrab::Result<()> {
             Ok(Some(review_event)) => {
                 events.push(review_event);
             }
-            Err(_) => {
+            Err(e) => {
+                let msg = format!("Unable to get reviews by editor: {}\n{e:#?}", pr_identifier);
+                eprintln!("{}", msg);
+                last_error = Err(e.into());
                 continue;
             }
             _ => {}
         }
         let pr_authors = match authors(&octocrab, &pr, owner, repo).await {
             Ok(authors) => authors,
-            Err(_) => {
+            Err(e) => {
+                let msg = format!("Unable to get authors: {}\n{e:#?}", pr_identifier);
+                eprintln!("{}", msg);
+                last_error = Err(e.into());
                 continue;
             }
         };
         let comments = match comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await {
             Ok(comments) => comments,
-            Err(_) => {
+            Err(e) => {
+                let msg = format!("Unable to get issue comments: {}\n{e:#?}", pr_identifier);
+                eprintln!("{}", msg);
+                last_error = Err(e.into());
                 continue;
             }
         };
@@ -93,14 +136,20 @@ async fn main() -> octocrab::Result<()> {
         let pr_comments =
             match pr_comments(&octocrab, &pr, owner, repo, &editors, &pr_authors).await {
                 Ok(comments) => comments,
-                Err(_) => {
+                Err(e) => {
+                    let msg = format!("Unable to get PR comments: {}\n{e:#?}", pr_identifier);
+                    eprintln!("{}", msg);
+                    last_error = Err(e.into());
                     continue;
                 }
             };
         events.extend(pr_comments);
         let pr_commits = match commits(&octocrab, &pr, owner, repo).await {
             Ok(commits) => commits,
-            Err(_) => {
+            Err(e) => {
+                let msg = format!("Unable to get PR commits: {}\n{e:#?}", pr_identifier);
+                eprintln!("{}", msg);
+                last_error = Err(e.into());
                 continue;
             }
         };
@@ -146,7 +195,8 @@ async fn main() -> octocrab::Result<()> {
         let index = HtmlTemplate { urls };
         println!("{}", index.render().unwrap());
     }
-    Ok(())
+
+    last_error
 }
 
 async fn reviewed_by_editor(
