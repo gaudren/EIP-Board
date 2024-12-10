@@ -86,6 +86,14 @@ async fn main() -> Result<(), Error> {
             .as_ref()
             .map(ToString::to_string)
             .unwrap_or_else(|| pr.url.clone());
+        
+        if let Some(labels) = &pr.labels {
+            let has_a_review = labels.iter().any(|label| label.name == "a-review");
+            if has_a_review {
+                println!("Skipping PR due to 'a-review' label: {:?}", pr.html_url);
+                continue;
+            }
+        }
 
         let created = match pr.created_at {
             Some(created) => created,
