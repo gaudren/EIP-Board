@@ -17,7 +17,7 @@ use reqwest::StatusCode;
 
 #[derive(Debug)]
 enum Error {
-    Octocrab(octocrab::Error),
+    Octocrab(Box<octocrab::Error>),
     Other(String),
 }
 
@@ -34,7 +34,7 @@ impl std::error::Error for Error {}
 
 impl From<octocrab::Error> for Error {
     fn from(value: octocrab::Error) -> Self {
-        Self::Octocrab(value)
+        Self::Octocrab(Box::new(value))
     }
 }
 
