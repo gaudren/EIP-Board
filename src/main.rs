@@ -385,9 +385,10 @@ async fn authors(
             }
             Ok(o) => o,
         };
-        let authors = preamble.by_name("author").unwrap().value().trim();
-
-        let authors = authors.split(',').map(str::trim);
+        let authors = match preamble.by_name("author") {
+            Some(a) => a.value().trim().split(',').map(str::trim).collect(),
+            None => vec![],
+        };
 
         for author in authors {
             let captures = match re.captures(author) {
